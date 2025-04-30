@@ -1,152 +1,207 @@
+/**
+ * Emucord Core - Discord customization framework
+ * Runs in page context, isolated from extension APIs
+ */
 class Emucord {
-    constructor() {
+    constructor(extensionId) {
+        this.extensionId = extensionId;
         this.plugins = [];
         this.themes = [];
         this.settings = {
             autoUpdatePlugins: false,
-            enableDevTools: false
+            enableDevTools: false,
+            injectAPI: true
         };
+        
+        this.messageQueue = [];
+        this.isExtensionConnected = false;
+        this.pluginAPIInjected = false;
         
         this.init();
         this.setupMessageHandlers();
         this.setupMutationObserver();
-        this.injectStyles();
+        this.injectBaseStyles();
     }
 
-    init() {
+    async init() {
         console.log('[Emucord] Initializing...');
-        this.loadSettings().then(() => {
-            this.loadSavedPlugins();
-            this.loadSavedThemes();
-            
-            if (this.settings.enableDevTools) {
-                this.setupDevTools();
-            }
-        });
-    }
-
-    setupMessageHandlers() {
-        // Handle messages from the extension
-        chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-            this.handleMessage(message);
-        });
+        await this.loadSettings();
+        this.loadPlugins();
+        this.loadThemes();
         
-        // Handle messages from the page
-        window.addEventListener('message', (event) => {
-            if (event.data && event.data.emucord) {
-                this.handleMessage(event.data.emucord);
-            }
-        });
-    }
-
-    handleMessage(message) {
-        console.log('[Emucord] Received message:', message);
+        if (this.settings.enableDevTools) {
+            this.setupDevTools();
+        }
         
-        switch (message.action) {
-            case 'addPlugin':
-                this.addPlugin(message.plugin);
-                break;
-                
-            case 'addTheme':
-                this.addTheme(message.theme);
-                break;
-                
-            case 'reloadPlugins':
-                this.loadSavedPlugins();
-                break;
-                
-            case 'reloadThemes':
-                this.loadSavedThemes();
-                break;
-                
-            case 'reloadAll':
-                this.loadSavedPlugins();
-                this.loadSavedThemes();
-                break;
-                
-            case 'clearAll':
-                this.clearAll();
-                break;
-                
-            case 'updateSettings':
-                this.updateSettings(message.settings);
-                break;
-                
-            case 'getPluginAPI':
-                return this.getPluginAPI();
+        if (this.settings.injectAPI) {
+            this.injectPluginAPI();
         }
     }
 
+    // ========================
+    // MESSAGE HANDLING SYSTEM
+    // ========================
+    
+    setupMessageHandlers() {
+        window.addEventListener('message', (event) => {
+            if (event.source !== window) return;
+            
+            // Handle messages from the extension bridge
+            if (event.data.type === 'EMUCORD_FROM_EXTENSION') {
+                this.handleExtensionMessage(event.data.payload);
+            }
+            
+            // Handle messages from plugins
+            if (event.data.emucord) {
+                this.handlePluginMessage(event.data.emucord);
+            }
+        });
+    }
+
+    handleExtensionMessage(message) {
+        console.debug('[Emucord] Extension message:', message);
+        
+        switch (message.action) {
+            case 'initResponse':
+                this.isExtensionConnected = true;
+                this.processMessageQueue();
+                break;
+                
+            case 'settingsResponse':
+                this.settings = { ...this.settings, ...message.settings };
+                this.applySettingsChanges();
+                break;
+                
+            case 'pluginsResponse':
+                this.plugins = message.plugins;
+                this.executePlugins();
+                break;
+                
+            case 'themesResponse':
+                this.themes = message.themes;
+                this.applyThemes();
+                break;
+                
+            case 'showToast':
+                this.showToast(message.text, message.type);
+                break;
+        }
+    }
+
+    handlePluginMessage(message) {
+        console.debug('[Emucord] Plugin message:', message);
+        
+        switch (message.action) {
+            case 'registerCommand':
+                this.registerCommand(message.command, message.callback);
+                break;
+                
+            case 'showToast':
+                this.showToast(message.message, message.type);
+                break;
+                
+            case 'getAPI':
+                this.sendAPIResponse(message.requestId);
+                break;
+        }
+    }
+
+    sendToExtension(message) {
+        const messageData = {
+            type: 'EMUCORD_TO_EXTENSION',
+            payload: message
+        };
+        
+        if (this.isExtensionConnected) {
+            window.postMessage(messageData, '*');
+        } else {
+            this.messageQueue.push(messageData);
+        }
+    }
+
+    processMessageQueue() {
+        while (this.messageQueue.length > 0) {
+            const message = this.messageQueue.shift();
+            window.postMessage(message, '*');
+        }
+    }
+
+    // ========================
+    // DATA LOADING/SAVING
+    // ========================
+    
     async loadSettings() {
         return new Promise((resolve) => {
-            chrome.storage.sync.get(['emucordSettings'], (result) => {
-                if (result.emucordSettings) {
-                    this.settings = {
-                        ...this.settings,
-                        ...result.emucordSettings
-                    };
+            const requestId = Date.now().toString();
+            
+            const listener = (event) => {
+                if (event.data.type === 'EMUCORD_FROM_EXTENSION' && 
+                    event.data.payload.action === 'settingsResponse' &&
+                    event.data.payload.requestId === requestId) {
+                    window.removeEventListener('message', listener);
+                    resolve();
                 }
-                resolve();
+            };
+            
+            window.addEventListener('message', listener);
+            this.sendToExtension({
+                action: 'getSettings',
+                requestId: requestId
             });
         });
     }
 
-    loadSavedPlugins() {
-        chrome.storage.sync.get(['emucordPlugins'], (result) => {
-            if (result.emucordPlugins) {
-                this.plugins = result.emucordPlugins;
-                this.executePlugins();
-            }
+    loadPlugins() {
+        this.sendToExtension({
+            action: 'getPlugins'
         });
     }
 
-    loadSavedThemes() {
-        chrome.storage.sync.get(['emucordThemes'], (result) => {
-            if (result.emucordThemes) {
-                this.themes = result.emucordThemes;
-                this.applyThemes();
-            }
+    loadThemes() {
+        this.sendToExtension({
+            action: 'getThemes'
         });
     }
 
-    setupMutationObserver() {
-        // Watch for DOM changes to reapply styles if needed
-        const observer = new MutationObserver(() => {
-            this.applyThemes();
-            
-            // Re-inject plugin API if needed
-            if (document.getElementById('emucord-plugin-api')) {
-                this.injectPluginAPI();
-            }
-        });
-        
-        observer.observe(document, { 
-            childList: true, 
-            subtree: true,
-            attributes: true
+    saveSettings() {
+        this.sendToExtension({
+            action: 'saveSettings',
+            settings: this.settings
         });
     }
 
+    savePlugins() {
+        this.sendToExtension({
+            action: 'savePlugins',
+            plugins: this.plugins
+        });
+    }
+
+    saveThemes() {
+        this.sendToExtension({
+            action: 'saveThemes',
+            themes: this.themes
+        });
+    }
+
+    // ========================
+    // PLUGIN SYSTEM
+    // ========================
+    
     executePlugins() {
-        // First clean up old plugins
+        // Clean up old plugins
         document.querySelectorAll('script.emucord-plugin').forEach(el => el.remove());
+        document.querySelectorAll('style.emucord-plugin-style').forEach(el => el.remove());
         
         // Execute all plugins
         this.plugins.forEach(plugin => {
             try {
                 if (plugin.type === 'js') {
-                    const script = document.createElement('script');
-                    script.className = 'emucord-plugin';
-                    script.textContent = `
-                        (function() {
-                            ${plugin.code}
-                        })();
-                    `;
-                    document.head.appendChild(script);
+                    this.executeJsPlugin(plugin);
                 } else if (plugin.type === 'json') {
-                    // Handle JSON plugin configuration
-                    console.log('[Emucord] Loaded JSON plugin:', plugin.name);
-                    this.handleJsonPlugin(plugin);
+                    this.executeJsonPlugin(plugin);
+                } else if (plugin.type === 'css') {
+                    this.executeCssPlugin(plugin);
                 }
             } catch (e) {
                 console.error(`[Emucord] Error loading plugin ${plugin.name}:`, e);
@@ -154,23 +209,64 @@ class Emucord {
         });
     }
 
-    handleJsonPlugin(plugin) {
-        // Example JSON plugin handler - can be expanded based on your needs
-        if (plugin.code.css) {
-            const style = document.createElement('style');
-            style.className = 'emucord-plugin-style';
-            style.textContent = plugin.code.css;
-            document.head.appendChild(style);
-        }
-        
-        if (plugin.code.js) {
-            const script = document.createElement('script');
-            script.className = 'emucord-plugin';
-            script.textContent = plugin.code.js;
-            document.head.appendChild(script);
+    executeJsPlugin(plugin) {
+        const script = document.createElement('script');
+        script.className = 'emucord-plugin';
+        script.textContent = `
+            //# sourceURL=${plugin.name}.js
+            (function(EmucordAPI) {
+                try {
+                    ${plugin.code}
+                } catch(e) {
+                    console.error('[Emucord] Plugin ${plugin.name} error:', e);
+                }
+            })(window.EmucordAPI);
+        `;
+        document.head.appendChild(script);
+    }
+
+    executeJsonPlugin(plugin) {
+        try {
+            const config = JSON.parse(plugin.code);
+            
+            if (config.css) {
+                const style = document.createElement('style');
+                style.className = 'emucord-plugin-style';
+                style.textContent = config.css;
+                document.head.appendChild(style);
+            }
+            
+            if (config.js) {
+                this.executeJsPlugin({
+                    ...plugin,
+                    type: 'js',
+                    code: config.js
+                });
+            }
+        } catch (e) {
+            console.error(`[Emucord] Error parsing JSON plugin ${plugin.name}:`, e);
         }
     }
 
+    executeCssPlugin(plugin) {
+        const style = document.createElement('style');
+        style.className = 'emucord-plugin-style';
+        style.textContent = plugin.code;
+        document.head.appendChild(style);
+    }
+
+    registerCommand(command, callback) {
+        this.sendToExtension({
+            action: 'registerCommand',
+            command: command,
+            callback: callback.toString()
+        });
+    }
+
+    // ========================
+    // THEME SYSTEM
+    // ========================
+    
     applyThemes() {
         // Remove old theme styles
         document.querySelectorAll('style.emucord-theme').forEach(el => el.remove());
@@ -184,20 +280,194 @@ class Emucord {
         });
     }
 
-    injectStyles() {
+    // ========================
+    // PLUGIN API
+    // ========================
+    
+    injectPluginAPI() {
+        if (this.pluginAPIInjected) return;
+        this.pluginAPIInjected = true;
+        
+        const script = document.createElement('script');
+        script.id = 'emucord-plugin-api';
+        script.textContent = `
+            (function() {
+                const requestId = Date.now();
+                const callbacks = {};
+                
+                window.EmucordAPI = {
+                    VERSION: '1.2.0',
+                    
+                    // Core API
+                    showToast: function(message, type = 'info') {
+                        window.postMessage({
+                            emucord: {
+                                action: 'showToast',
+                                message: message,
+                                type: type
+                            }
+                        }, '*');
+                    },
+                    
+                    registerCommand: function(command, callback) {
+                        window.postMessage({
+                            emucord: {
+                                action: 'registerCommand',
+                                command: command,
+                                callback: callback.toString()
+                            }
+                        }, '*');
+                    },
+                    
+                    addStyle: function(css) {
+                        const style = document.createElement('style');
+                        style.textContent = css;
+                        document.head.appendChild(style);
+                        return style;
+                    },
+                    
+                    // Discord state access
+                    getCurrentUser: function() {
+                        return window._state?.user;
+                    },
+                    
+                    getGuilds: function() {
+                        return window._state?.guilds;
+                    },
+                    
+                    getChannels: function() {
+                        return window._state?.channels;
+                    },
+                    
+                    // Promise-based API calls
+                    call: function(method, ...args) {
+                        return new Promise((resolve, reject) => {
+                            const id = requestId + '-' + Math.random().toString(36).substr(2, 9);
+                            callbacks[id] = { resolve, reject };
+                            
+                            window.postMessage({
+                                emucord: {
+                                    action: 'apiCall',
+                                    callId: id,
+                                    method: method,
+                                    args: args
+                                }
+                            }, '*');
+                        });
+                    }
+                };
+                
+                // Handle responses
+                window.addEventListener('message', (event) => {
+                    if (event.data.emucordResponse) {
+                        const { callId, result, error } = event.data.emucordResponse;
+                        if (callbacks[callId]) {
+                            if (error) {
+                                callbacks[callId].reject(error);
+                            } else {
+                                callbacks[callId].resolve(result);
+                            }
+                            delete callbacks[callId];
+                        }
+                    }
+                });
+            })();
+        `;
+        document.head.appendChild(script);
+    }
+
+    sendAPIResponse(requestId) {
+        window.postMessage({
+            emucordResponse: {
+                callId: requestId,
+                result: this.getPluginAPI()
+            }
+        }, '*');
+    }
+
+    getPluginAPI() {
+        return {
+            version: '1.2.0',
+            showToast: (message, type) => this.showToast(message, type),
+            getCurrentUser: () => this.getDiscordState().user,
+            getGuilds: () => this.getDiscordState().guilds,
+            getChannels: () => this.getDiscordState().channels,
+            addStyle: (css) => {
+                const style = document.createElement('style');
+                style.textContent = css;
+                document.head.appendChild(style);
+                return style;
+            }
+        };
+    }
+
+    getDiscordState() {
+        try {
+            return {
+                user: window._state?.user || {},
+                guilds: window._state?.guilds || {},
+                channels: window._state?.channels || {},
+                settings: window._state?.settings || {}
+            };
+        } catch (e) {
+            console.warn('[Emucord] Error accessing Discord state:', e);
+            return {};
+        }
+    }
+
+    // ========================
+    // UI COMPONENTS
+    // ========================
+    
+    injectBaseStyles() {
         const style = document.createElement('style');
         style.className = 'emucord-base-styles';
         style.textContent = `
-            /* Base styles for Emucord UI elements */
+            .emucord-toast {
+                position: fixed;
+                bottom: 20px;
+                right: 20px;
+                padding: 12px 16px;
+                border-radius: 4px;
+                color: white;
+                z-index: 10000;
+                max-width: 300px;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+                animation: emucord-toast-fadein 0.3s;
+            }
+            
+            .emucord-toast-info {
+                background: #7289da;
+            }
+            
+            .emucord-toast-success {
+                background: #43b581;
+            }
+            
+            .emucord-toast-error {
+                background: #f04747;
+            }
+            
+            .emucord-toast-warning {
+                background: #faa61a;
+            }
+            
+            @keyframes emucord-toast-fadein {
+                from { opacity: 0; transform: translateY(10px); }
+                to { opacity: 1; transform: translateY(0); }
+            }
+            
             .emucord-toolbar {
                 position: fixed;
                 bottom: 10px;
-                right: 10px;
+                right: 60px;
                 z-index: 9999;
                 background: #36393f;
                 border-radius: 8px;
                 padding: 8px;
                 box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+                display: flex;
+                gap: 4px;
             }
             
             .emucord-btn {
@@ -207,182 +477,119 @@ class Emucord {
                 padding: 6px 12px;
                 border-radius: 4px;
                 cursor: pointer;
-                margin: 2px;
+                font-size: 12px;
+            }
+            
+            .emucord-btn:hover {
+                background: #677bc4;
+            }
+            
+            .emucord-btn-danger {
+                background: #f04747;
+            }
+            
+            .emucord-btn-danger:hover {
+                background: #d84040;
             }
         `;
         document.head.appendChild(style);
     }
 
-    injectPluginAPI() {
-        if (document.getElementById('emucord-plugin-api')) return;
-        
-        const script = document.createElement('script');
-        script.id = 'emucord-plugin-api';
-        script.textContent = `
-            window.EmucordAPI = {
-                version: '1.0',
-                
-                getCurrentUser: function() {
-                    return window._state?.user;
-                },
-                
-                getGuilds: function() {
-                    return window._state?.guilds;
-                },
-                
-                getChannels: function() {
-                    return window._state?.channels;
-                },
-                
-                showToast: function(message, type = 'info') {
-                    window.postMessage({
-                        emucord: {
-                            action: 'showToast',
-                            message: message,
-                            type: type
-                        }
-                    }, '*');
-                },
-                
-                registerCommand: function(command, callback) {
-                    window.postMessage({
-                        emucord: {
-                            action: 'registerCommand',
-                            command: command,
-                            callback: callback.toString()
-                        }
-                    }, '*');
-                },
-                
-                addStyle: function(css) {
-                    const style = document.createElement('style');
-                    style.textContent = css;
-                    document.head.appendChild(style);
-                    return style;
-                }
-            };
-        `;
-        document.head.appendChild(script);
-    }
-
-    getPluginAPI() {
-        return {
-            version: '1.0',
-            showToast: (message, type) => this.showToast(message, type),
-            getCurrentUser: () => this.getDiscordState().user,
-            getGuilds: () => this.getDiscordState().guilds,
-            getChannels: () => this.getDiscordState().channels
-        };
-    }
-
-    getDiscordState() {
-        // Try to access Discord's internal state
-        return {
-            user: window._state?.user || {},
-            guilds: window._state?.guilds || {},
-            channels: window._state?.channels || {}
-        };
-    }
-
     showToast(message, type = 'info') {
-        // Implementation for showing toast notifications
         const toast = document.createElement('div');
         toast.className = `emucord-toast emucord-toast-${type}`;
         toast.textContent = message;
-        toast.style.position = 'fixed';
-        toast.style.bottom = '20px';
-        toast.style.right = '20px';
-        toast.style.padding = '10px 15px';
-        toast.style.background = type === 'error' ? '#f04747' : '#7289da';
-        toast.style.color = 'white';
-        toast.style.borderRadius = '4px';
-        toast.style.zIndex = '10000';
         document.body.appendChild(toast);
         
         setTimeout(() => {
-            toast.remove();
+            toast.style.animation = 'emucord-toast-fadein 0.3s reverse';
+            setTimeout(() => toast.remove(), 300);
         }, 3000);
     }
 
-    addPlugin(plugin) {
-        this.plugins.push(plugin);
-        this.executePlugins([plugin]);
-        this.savePlugins();
-    }
-
-    addTheme(theme) {
-        this.themes.push(theme);
-        this.applyThemes();
-        this.saveThemes();
-    }
-
-    updateSettings(newSettings) {
-        this.settings = {
-            ...this.settings,
-            ...newSettings
-        };
-        this.saveSettings();
-        
-        if (this.settings.enableDevTools) {
-            this.setupDevTools();
-        }
-    }
-
-    clearAll() {
-        this.plugins = [];
-        this.themes = [];
-        this.savePlugins();
-        this.saveThemes();
-        document.querySelectorAll('style.emucord-theme, script.emucord-plugin').forEach(el => el.remove());
-    }
-
-    savePlugins() {
-        chrome.storage.sync.set({ emucordPlugins: this.plugins });
-    }
-
-    saveThemes() {
-        chrome.storage.sync.set({ emucordThemes: this.themes });
-    }
-
-    saveSettings() {
-        chrome.storage.sync.set({ emucordSettings: this.settings });
-    }
-
     setupDevTools() {
-        if (!this.devToolsEnabled) {
-            this.injectDevTools();
-            this.devToolsEnabled = true;
-        }
-    }
-
-    injectDevTools() {
+        if (document.getElementById('emucord-devtools')) return;
+        
         const toolbar = document.createElement('div');
+        toolbar.id = 'emucord-devtools';
         toolbar.className = 'emucord-toolbar';
         toolbar.innerHTML = `
             <button class="emucord-btn" id="emucord-reload">Reload</button>
             <button class="emucord-btn" id="emucord-open-options">Options</button>
+            <button class="emucord-btn emucord-btn-danger" id="emucord-clear">Clear</button>
         `;
         document.body.appendChild(toolbar);
         
         document.getElementById('emucord-reload').addEventListener('click', () => {
-            this.loadSavedPlugins();
-            this.loadSavedThemes();
-            this.showToast('Emucord reloaded!');
+            this.loadPlugins();
+            this.loadThemes();
+            this.showToast('Emucord reloaded!', 'success');
         });
         
         document.getElementById('emucord-open-options').addEventListener('click', () => {
-            chrome.runtime.sendMessage({ action: 'openOptionsPage' });
+            this.sendToExtension({ action: 'openOptionsPage' });
+        });
+        
+        document.getElementById('emucord-clear').addEventListener('click', () => {
+            if (confirm('Clear all Emucord plugins and themes?')) {
+                this.sendToExtension({ action: 'clearAll' });
+                this.showToast('Cleared all plugins and themes', 'success');
+            }
+        });
+    }
+
+    applySettingsChanges() {
+        if (this.settings.enableDevTools) {
+            this.setupDevTools();
+        } else {
+            const devTools = document.getElementById('emucord-devtools');
+            if (devTools) devTools.remove();
+        }
+        
+        if (this.settings.injectAPI && !this.pluginAPIInjected) {
+            this.injectPluginAPI();
+        } else if (!this.settings.injectAPI && this.pluginAPIInjected) {
+            const apiScript = document.getElementById('emucord-plugin-api');
+            if (apiScript) apiScript.remove();
+            this.pluginAPIInjected = false;
+        }
+    }
+
+    // ========================
+    // MUTATION OBSERVER
+    // ========================
+    
+    setupMutationObserver() {
+        const observer = new MutationObserver((mutations) => {
+            // Re-inject API if needed
+            if (this.settings.injectAPI && !document.getElementById('emucord-plugin-api')) {
+                this.injectPluginAPI();
+            }
+            
+            // Re-apply themes if head changes
+            if (mutations.some(m => m.target.nodeName === 'HEAD')) {
+                this.applyThemes();
+            }
+        });
+        
+        observer.observe(document, {
+            childList: true,
+            subtree: true,
+            attributes: false
         });
     }
 }
 
-// Initialize Emucord with enhanced safety
+// Initialize Emucord safely
 if (!window.EmucordInitialized) {
     window.EmucordInitialized = true;
-    window.Emucord = new Emucord();
     
-    // Inject plugin API after a short delay to ensure DOM is ready
-    setTimeout(() => {
-        window.Emucord.injectPluginAPI();
-    }, 1000);
+    const initListener = (event) => {
+        if (event.data.type === 'EMUCORD_INIT') {
+            window.removeEventListener('message', initListener);
+            window.Emucord = new Emucord(event.data.payload.extensionId);
+        }
+    };
+    
+    window.addEventListener('message', initListener);
 }
