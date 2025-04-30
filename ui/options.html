@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Emucord Options</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            color: #ddd;
+            background-color: #36393f;
+        }
+        
+        h1 {
+            color: #7289da;
+            border-bottom: 1px solid #7289da;
+            padding-bottom: 10px;
+        }
+        
+        .section {
+            background-color: #2f3136;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+        
+        .section h2 {
+            margin-top: 0;
+            color: #b9bbbe;
+        }
+        
+        button {
+            background-color: #7289da;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+        
+        button:hover {
+            background-color: #677bc4;
+        }
+        
+        button.danger {
+            background-color: #f04747;
+        }
+        
+        button.danger:hover {
+            background-color: #d84040;
+        }
+        
+        textarea, input[type="text"], input[type="url"] {
+            width: 100%;
+            padding: 8px;
+            margin-bottom: 10px;
+            border-radius: 4px;
+            border: 1px solid #202225;
+            background-color: #40444b;
+            color: #dcddde;
+        }
+        
+        .plugin, .theme {
+            background-color: #40444b;
+            border-radius: 6px;
+            padding: 12px;
+            margin-bottom: 10px;
+            position: relative;
+        }
+        
+        .plugin h3, .theme h3 {
+            margin-top: 0;
+            color: #7289da;
+        }
+        
+        .plugin-actions, .theme-actions {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+        }
+        
+        .tab-buttons {
+            display: flex;
+            margin-bottom: 20px;
+            border-bottom: 1px solid #4f545c;
+        }
+        
+        .tab-button {
+            padding: 10px 20px;
+            cursor: pointer;
+            background: none;
+            border: none;
+            color: #b9bbbe;
+            border-bottom: 3px solid transparent;
+        }
+        
+        .tab-button.active {
+            color: white;
+            border-bottom-color: #7289da;
+        }
+        
+        .tab-content {
+            display: none;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        .import-export {
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Emucord Settings</h1>
+    
+    <div class="tab-buttons">
+        <button class="tab-button active" data-tab="plugins">Plugins</button>
+        <button class="tab-button" data-tab="themes">Themes</button>
+        <button class="tab-button" data-tab="settings">Settings</button>
+    </div>
+    
+    <div id="plugins" class="tab-content active">
+        <div class="section">
+            <h2>Add New Plugin</h2>
+            <div>
+                <input type="url" id="plugin-url" placeholder="Plugin URL (JS or JSON)">
+                <button id="load-plugin-url">Load from URL</button>
+            </div>
+            <div style="margin-top: 15px;">
+                <textarea id="plugin-code" placeholder="Or paste plugin code here" rows="8"></textarea>
+                <input type="text" id="plugin-name" placeholder="Plugin name">
+                <button id="add-plugin">Add Plugin</button>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h2>Installed Plugins</h2>
+            <div id="plugin-list"></div>
+        </div>
+    </div>
+    
+    <div id="themes" class="tab-content">
+        <div class="section">
+            <h2>Add New Theme</h2>
+            <div>
+                <input type="url" id="theme-url" placeholder="Theme CSS URL">
+                <button id="load-theme-url">Load from URL</button>
+            </div>
+            <div style="margin-top: 15px;">
+                <textarea id="theme-css" placeholder="Or paste CSS here" rows="8"></textarea>
+                <input type="text" id="theme-name" placeholder="Theme name">
+                <button id="add-theme">Add Theme</button>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h2>Installed Themes</h2>
+            <div id="theme-list"></div>
+        </div>
+    </div>
+    
+    <div id="settings" class="tab-content">
+        <div class="section">
+            <h2>Extension Settings</h2>
+            <div>
+                <label>
+                    <input type="checkbox" id="auto-update-plugins">
+                    Automatically check for plugin updates
+                </label>
+            </div>
+        </div>
+        
+        <div class="section import-export">
+            <h2>Backup & Restore</h2>
+            <button id="export-settings">Export All Settings</button>
+            <button id="import-settings">Import Settings</button>
+            <input type="file" id="import-file" accept=".json" style="display: none;">
+        </div>
+        
+        <div class="section">
+            <h2>Danger Zone</h2>
+            <button class="danger" id="reset-all">Reset All Settings</button>
+        </div>
+    </div>
+
+    <script src="options.js"></script>
+</body>
+</html>
