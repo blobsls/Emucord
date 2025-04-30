@@ -1,0 +1,43 @@
+{
+  "manifest_version": 3,
+  "name": "Emucord",
+  "version": "1.0.0",
+  "description": "Vencord-like customization for Discord web",
+  
+  "permissions": [
+    "storage",
+    "scripting",
+    "activeTab"
+  ],
+  
+  "host_permissions": [
+    "*://*.discord.com/*"
+  ],
+  
+  "background": {
+    "service_worker": "background/service-worker.js"
+  },
+  
+  "content_scripts": [
+    {
+      "matches": ["*://*.discord.com/*"],
+      "js": ["content/inject.js"],
+      "run_at": "document_start"
+    }
+  ],
+  
+  "action": {
+    "default_popup": "ui/popup.html",
+    "default_title": "Emucord"
+  },
+  
+  "options_ui": {
+    "page": "ui/options.html",
+    "open_in_tab": true
+  },
+  
+  "web_accessible_resources": [{
+    "resources": ["content/emucord-core.js", "lib/*"],
+    "matches": ["*://*.discord.com/*"]
+  }]
+}
